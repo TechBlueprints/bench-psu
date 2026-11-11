@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: Apache-2.0
+# bench-psud: the only process that talks to the bench supply.
+# Starting, stopping or restarting this unit sends queries only; the supply's
+# output is never changed by it (unless output_off_on_exit = true in the config).
+[Unit]
+Description=Bench PSU daemon (Kiprim DC620S over USB serial)
+Documentation=file:///usr/local/share/doc/bench-psu/README.md
+After=network.target systemd-udevd.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=bench-psu
+Group=bench-psu
+SupplementaryGroups=dialout
+ExecStart=/usr/local/bin/bench-psud --config /etc/bench-psu/config.toml
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+SyslogIdentifier=bench-psud
+
+# Hardening: the daemon needs the tty, its config and a TCP port, nothing else.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+DevicePolicy=closed
+DeviceAllow=char-ttyUSB rw
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

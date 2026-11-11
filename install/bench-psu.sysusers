@@ -1,0 +1,3 @@
+# SPDX-License-Identifier: Apache-2.0
+u bench-psu - "Bench PSU daemon" /nonexistent /usr/sbin/nologin
+m bench-psu dialout

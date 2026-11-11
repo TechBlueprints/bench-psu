@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Kiprim DC620S (CH340 USB-serial, 1a86:7523). CH340s carry no USB serial
+# number, so the supply is identified by the USB port it is plugged into
+# (ID_PATH); the installer fills it in. Gives /dev/kiprim and tells
+# ModemManager to leave the port alone.
+SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="1a86", ENV{ID_MODEL_ID}=="7523", ENV{ID_PATH}=="@ID_PATH@", SYMLINK+="kiprim", GROUP="dialout", MODE="0660", ENV{ID_MM_DEVICE_IGNORE}="1"
