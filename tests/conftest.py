@@ -84,9 +84,11 @@ def make_daemon(tmp_path):
         token_file = tmp_path / "token"
         if token is not None:
             token_file.write_text(token + "\n")
-        cfg = Config(device="sim", reply_timeout=0.05, setter_error_window=0.01,
-                     poll_interval=0.05, setpoint_interval=0.2, reconnect_interval=0.05,
-                     listen="127.0.0.1", port=0, token_file=str(token_file), **cfg_kw)
+        kw = dict(device="sim", reply_timeout=0.05, setter_error_window=0.01,
+                  poll_interval=0.05, setpoint_interval=0.2, reconnect_interval=0.05,
+                  listen="127.0.0.1", port=0, token_file=str(token_file))
+        kw.update(cfg_kw)
+        cfg = Config(**kw)
         d = Daemon(cfg, lambda: SimPort(supply))
         server = serve(d, "127.0.0.1", 0)
         threading.Thread(target=server.serve_forever, daemon=True).start()

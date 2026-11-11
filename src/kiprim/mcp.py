@@ -6,8 +6,9 @@ Standard library only: JSON-RPC 2.0 over ``POST /mcp``, answering with
 the daemon's worker, so the one-owner rule for the serial port still holds.
 
 Read tools are open. Write tools are listed and callable only when the
-request carries the daemon's bearer token; without it the server presents a
-read-only toolset.
+request carries the daemon's bearer token; without an Authorization header the
+server presents a read-only toolset, and a wrong token is refused at the HTTP
+level (401/403) rather than silently downgraded.
 """
 
 from __future__ import annotations
@@ -24,15 +25,17 @@ bench-psud daemon that owns its USB port.
 
 Safety rules, which the daemon enforces where it can and you must follow where it cannot:
 - Call get_status first and read 'output', 'setpoints', 'protection', 'ceilings' and 'warnings'.
+  If link.ok is false, the data is not live: say so and do not write.
 - Never assume what is connected to the terminals. Ask the human before switching the output on
   or raising a setpoint, and say what you will set.
 - Never connect to or charge a battery with this supply: it has no reverse-current blocking and
   the manual forbids direct battery charging.
-- Changing the current limit while the output is on switches the output off and back on
-  (firmware can trip OCP on a live write). Say so before doing it.
+- With the output on, changing the current limit or either protection limit switches the output
+  off and back on (writing the OCP limit with current flowing is reported to trip OCP on this
+  firmware family). Say so before doing it; use live=true only when the human asked for it.
 - Never raise the OVP limit to silence an OVP trip; report the trip instead.
-- Host ceilings (max_voltage / max_current) are hard limits set by the owner; do not try to work
-  around them.
+- Host ceilings (max_voltage / max_current) and the OVP/OCP margins are hard limits set by the
+  owner; do not try to work around them.
 """
 
 
@@ -60,10 +63,16 @@ def tools(writer: bool) -> list[dict]:
             out.append(_tool(name, description, schema, False,
                              destructive=name in ("set_output", "set_current", "set_voltage_current")))
         out.append(_tool(
+            "reset_counters",
+            "Reset the daemon's Wh / Ah / output-on-time counters (status 'energy'). Sends nothing "
+            "to the supply.",
+            {"type": "object", "properties": {}}, False))
+        out.append(_tool(
             "probe",
             "Run the conformance probe. level=queries changes nothing; setters needs the output OFF and "
             "writes each setpoint back unchanged plus a lock/unlock; output and ocp_quirk switch the "
-            "output on and off (only with open terminals or a resistive load, and only when the human agreed).",
+            "output on and off (only with open terminals or a resistive load, and only when the human "
+            "agreed). If it fails part-way it still undoes the lock and switches the output off.",
             {"type": "object", "properties": {"level": {"type": "string",
              "enum": ["queries", "setters", "output", "ocp_quirk"], "default": "queries"}}},
             False, destructive=True))
@@ -80,7 +89,7 @@ def _call(d, name: str, args: dict, writer: bool, source: str) -> dict:
 
     if name == "get_status":
         return _result(d.status())
-    if name not in OPS and name != "probe":
+    if name not in OPS and name not in ("probe", "reset_counters"):
         raise KeyError(name)
     if not writer:
         return _result({"ok": False, "error": "write tools need the bearer token "
@@ -89,10 +98,16 @@ def _call(d, name: str, args: dict, writer: bool, source: str) -> dict:
         if name == "probe":
             rows = d.run_probe(str(args.get("level", "queries")), source)
             return _result({"ok": True, "rows": rows})
+        if name == "reset_counters":
+            return _result({"ok": True, "result": d.run_op("reset_counters", {}, source)})
         result = d.run_op(name, args, source)
     except Exception as exc:
+        from .probe import ProbeAborted, rows_as_dicts
         _, kind = classify(exc)
-        return _result({"ok": False, "kind": kind, "error": str(exc), "status": d.status()}, True)
+        payload = {"ok": False, "kind": kind, "error": str(exc), "status": d.status()}
+        if isinstance(exc, ProbeAborted):
+            payload["rows"] = rows_as_dicts(exc.rows)
+        return _result(payload, True)
     return _result({"ok": True, "result": result, "status": d.status()})
 
 

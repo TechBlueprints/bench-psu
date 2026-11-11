@@ -30,6 +30,20 @@ DEVICE_MAX_OVP = 63.0
 DEVICE_MAX_OCP = 21.0
 
 
+class WrongDevice(TransportError):
+    """The port answered ``*IDN?`` with an identity that is not the expected supply."""
+
+
+def check_identity(ident: parse.Identity, prefix: str, serial: str = "") -> None:
+    """Raise :class:`WrongDevice` unless ``*IDN?`` starts with ``prefix`` and,
+    when ``serial`` is set, carries that serial number. Nothing but ``*IDN?``
+    may be sent to a port before this passes."""
+    if prefix and not ident.raw.upper().startswith(prefix.upper()):
+        raise WrongDevice(f"*IDN? is {ident.raw!r}, expected it to start with {prefix!r}")
+    if serial and ident.serial != serial:
+        raise WrongDevice(f"serial number is {ident.serial!r}, expected {serial!r}")
+
+
 class ReadbackMismatch(TransportError):
     def __init__(self, what: str, wanted, got):
         super().__init__(f"{what}: wrote {wanted!r}, read back {got!r}")

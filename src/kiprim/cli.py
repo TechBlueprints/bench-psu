@@ -24,7 +24,9 @@ EXIT_ERROR, EXIT_REFUSED = 1, 2
 
 
 class CliError(Exception):
-    pass
+    def __init__(self, message: str, payload: dict | None = None):
+        super().__init__(message)
+        self.payload = payload or {}
 
 
 # ---- backends --------------------------------------------------------------
@@ -46,7 +48,7 @@ class DaemonBackend:
                 payload = json.loads(exc.read())
             except Exception:
                 payload = {"error": exc.reason}
-            raise CliError(f"HTTP {exc.code}: {payload.get('error', payload)}") from None
+            raise CliError(f"HTTP {exc.code}: {payload.get('error', payload)}", payload) from None
         except urllib.error.URLError as exc:
             raise CliError(f"cannot reach bench-psud at {self.url}: {exc.reason} "
                            "(is the service running? try --direct if it is stopped)") from None
@@ -68,12 +70,17 @@ class DaemonBackend:
 class DirectBackend:
     def __init__(self, cfg):
         from .control import Controller
-        from .instrument import Instrument
+        from .instrument import Instrument, check_identity
         from .transport import Transport, TtyPort
 
         self.cfg = cfg
         port = TtyPort(cfg.device)
         self.inst = Instrument(Transport(port, cfg.reply_timeout, cfg.setter_error_window, cfg.lost_after))
+        try:
+            check_identity(self.inst.idn(), cfg.expect_idn_prefix, cfg.expect_serial)
+        except BaseException:
+            self.inst.t.close()
+            raise
         self.ctl = Controller(self.inst, cfg.ceilings)
 
     def status(self) -> dict:
@@ -98,7 +105,9 @@ class DirectBackend:
             "protection": {"ovp_limit": sp.ovp, "ocp_limit": sp.ocp, **flags},
             "measured": measured,
             "ceilings": {"max_voltage": self.cfg.ceilings.max_voltage,
-                         "max_current": self.cfg.ceilings.max_current},
+                         "max_current": self.cfg.ceilings.max_current,
+                         "ovp_margin": self.cfg.ceilings.ovp_margin,
+                         "ocp_margin": self.cfg.ceilings.ocp_margin},
             "link": {"state": "direct", "device": self.cfg.device},
             "warnings": [],
         }
@@ -108,12 +117,14 @@ class DirectBackend:
         "/api/current": lambda c, b: c.set_current(b["amps"], live=b.get("live", False)),
         "/api/set": lambda c, b: c.set_both(b["volts"], b["amps"], live=b.get("live", False)),
         "/api/output": lambda c, b: c.set_output(b["on"]),
-        "/api/ovp": lambda c, b: c.set_ovp(b["volts"]),
-        "/api/ocp": lambda c, b: c.set_ocp(b["amps"]),
+        "/api/ovp": lambda c, b: c.set_ovp(b["volts"], live=b.get("live", False)),
+        "/api/ocp": lambda c, b: c.set_ocp(b["amps"], live=b.get("live", False)),
         "/api/lock": lambda c, b: c.set_lock(b["locked"]),
     }
 
     def op(self, path: str, body: dict) -> dict:
+        if path == "/api/counters/reset":
+            raise CliError("energy counters live in the daemon; there are none in --direct mode")
         return self._OPS[path](self.ctl, body)
 
     def probe(self, level: str) -> list[dict]:
@@ -141,6 +152,9 @@ def format_status(st: dict) -> str:
         f"tripped: {', '.join(tripped) or 'none'}",
         f"ceilings {st['ceilings']['max_voltage']:g} V  {st['ceilings']['max_current']:g} A (host)",
     ]
+    if st.get("energy"):
+        e = st["energy"]
+        lines.append(f"energy   {e['wh']:.3f} Wh  {e['ah']:.3f} Ah  on {e['output_on_s']:.0f} s  since {e['since']}")
     lines += [f"warning: {w}" for w in st.get("warnings", [])]
     return "\n".join(lines)
 
@@ -181,8 +195,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("off", help="output off")
     s = sub.add_parser("ovp", help="set over-voltage protection limit")
     s.add_argument("volts", type=float)
+    s.add_argument("--live", action="store_true", help="do not cycle the output")
     s = sub.add_parser("ocp", help="set over-current protection limit")
     s.add_argument("amps", type=float)
+    s.add_argument("--live", action="store_true", help="do not cycle the output")
+    sub.add_parser("reset-counters", help="reset the daemon's Wh/Ah counters")
     sub.add_parser("lock", help="lock the front panel")
     sub.add_parser("unlock", help="unlock the front panel")
     s = sub.add_parser("watch", help="print measurements until Ctrl-C")
@@ -248,15 +265,16 @@ def run(args, backend) -> int:
     elif c == "status":
         st = backend.status()
         show(st, format_status(st))
-    elif c in ("set", "volt", "curr", "on", "off", "ovp", "ocp", "lock", "unlock"):
+    elif c in ("set", "volt", "curr", "on", "off", "ovp", "ocp", "lock", "unlock", "reset-counters"):
         path, body = {
             "set": lambda: ("/api/set", {"volts": args.volts, "amps": args.amps, "live": args.live}),
             "volt": lambda: ("/api/voltage", {"volts": args.volts}),
             "curr": lambda: ("/api/current", {"amps": args.amps, "live": args.live}),
             "on": lambda: ("/api/output", {"on": True}),
             "off": lambda: ("/api/output", {"on": False}),
-            "ovp": lambda: ("/api/ovp", {"volts": args.volts}),
-            "ocp": lambda: ("/api/ocp", {"amps": args.amps}),
+            "ovp": lambda: ("/api/ovp", {"volts": args.volts, "live": args.live}),
+            "ocp": lambda: ("/api/ocp", {"amps": args.amps, "live": args.live}),
+            "reset-counters": lambda: ("/api/counters/reset", {}),
             "lock": lambda: ("/api/lock", {"locked": True}),
             "unlock": lambda: ("/api/lock", {"locked": False}),
         }[c]()
@@ -271,7 +289,15 @@ def run(args, backend) -> int:
                   f"{_n(m['power'], 'W')}", flush=True)
             time.sleep(args.interval)
     elif c == "probe":
-        rows = backend.probe(args.level)
+        try:
+            rows = backend.probe(args.level)
+        except CliError as exc:
+            if exc.payload.get("rows"):
+                print(format_probe(exc.payload["rows"]))
+            raise
+        except probe.ProbeAborted as exc:
+            print(format_probe(probe.rows_as_dicts(exc.rows)))
+            raise
         if args.json:
             show(rows)
         elif args.markdown:

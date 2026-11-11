@@ -12,4 +12,5 @@ cd "$(dirname "$0")/.."
 if [ -n "$(git status --porcelain)" ]; then
     echo "deploy: note: working tree has uncommitted changes; deploying HEAD $(git rev-parse --short HEAD) only" >&2
 fi
+# shellcheck disable=SC2029  # action and options are meant to expand here, on the client
 git archive --format=tar HEAD | ssh "$host" "set -e; d=\$(mktemp -d); trap 'rm -rf \$d' EXIT; tar -x -C \$d; \$d/install/install.sh $action $*"

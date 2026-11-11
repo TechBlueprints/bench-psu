@@ -1,6 +1,6 @@
 [project]
 name = "bench-psu"
-version = "0.1.0"
+version = "0.2.0"
 description = "Headless control of a Kiprim DC620S bench power supply: driver, daemon with HTTP API and MCP endpoint, CLI"
 readme = "README.md"
 license = "Apache-2.0"

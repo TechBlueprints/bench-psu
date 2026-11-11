@@ -52,7 +52,7 @@ def test_ovp_below_setpoint_refused():
     s.voltage = 13.8
     with pytest.raises(ConflictError):
         c.set_ovp(13)
-    assert c.set_ovp(14.5) == {"ovp": 14.5}
+    assert c.set_ovp(14.5) == {"ovp": 14.5, "cycled": False}
 
 
 def test_current_change_cycles_output_when_on():
@@ -133,3 +133,73 @@ def test_output_on_and_off():
     s, c = make()
     assert c.set_output(True) == {"output": True}
     assert c.set_output(False) == {"output": False}
+
+
+# ---- margins and the corrected quirk handling (review 2026-11-11) --------------
+def test_ocp_equal_to_flowing_current_is_refused():
+    # The reported trip: OCP written at the level the load is drawing.
+    s, c = make()
+    s.voltage, s.current, s.output, s.load_ohms = 12.0, 4.0, True, 1.0  # CC at 4 A
+    with pytest.raises(ConflictError, match="less than 0.1 A above"):
+        c.set_ocp(4.0)
+    assert s.setters_received() == []
+    assert c.set_ocp(4.1)["ocp"] == 4.1
+
+
+def test_current_needs_ocp_margin():
+    s, c = make()
+    s.ocp = 5.0
+    with pytest.raises(ConflictError, match="needs OCP at least 5.0"):
+        c.set_current(4.95)
+    assert s.setters_received() == []
+    assert c.set_current(4.9)["current"] == 4.9
+
+
+def test_voltage_needs_ovp_margin():
+    s, c = make()
+    s.ovp = 14.0
+    with pytest.raises(ConflictError, match="needs OVP"):
+        c.set_voltage(13.95)
+    assert c.set_voltage(13.9) == {"voltage": 13.9}
+
+
+def test_ocp_write_cycles_output_when_on():
+    s, c = make()
+    s.output = True
+    r = c.set_ocp(5.0)
+    assert r == {"ocp": 5.0, "cycled": True}
+    assert s.setters_received() == ["OUTP OFF", "CURR:LIM 5.000", "OUTP ON"]
+
+
+def test_ovp_write_cycles_output_when_on_unless_live():
+    s, c = make()
+    s.output = True
+    assert c.set_ovp(15.0, live=True) == {"ovp": 15.0, "cycled": False}
+    assert s.setters_received() == ["VOLT:LIM 15.00"]
+    assert c.set_ovp(16.0)["cycled"] is True
+
+
+def test_live_must_be_a_real_boolean():
+    s, c = make()
+    s.output = True
+    for bad in ("false", "true", 1, None):
+        with pytest.raises(LimitError):
+            c.set_current(4, live=bad)
+    assert s.setters_received() == []
+
+
+def test_output_on_refused_within_margin():
+    s, c = make()
+    s.voltage, s.ovp = 13.0, 13.05  # front panel left OVP almost at the setpoint
+    with pytest.raises(ConflictError, match="needs OVP"):
+        c.set_output(True)
+    assert s.setters_received() == []
+
+
+def test_margins_configurable_and_validated():
+    s, c = make()
+    c.ceilings = Ceilings(15.0, 10.0, ovp_margin=0.0, ocp_margin=0.0)
+    s.ocp = 4.0
+    assert c.set_current(4.0)["current"] == 4.0
+    with pytest.raises(ValueError):
+        Ceilings(15, 10, ocp_margin=-1)

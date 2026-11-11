@@ -5,6 +5,8 @@
 #
 #   install.sh install [--id-path <ID_PATH>] [--tty /dev/ttyUSB0] [--allow-from <CIDR>]
 #   install.sh upgrade            same as install; keeps config, token, udev rule, firewall file
+#                                 (--tty or --id-path rewrites the udev rule, e.g. after moving
+#                                 the supply to another USB port)
 #
 # --allow-from writes /etc/nftables.d/bench-psu.nft opening the daemon's TCP
 # port to that network, for hosts whose nftables.conf includes /etc/nftables.d/*.nft
@@ -108,8 +110,8 @@ do_install() {
         say "generated write token in $ETC/token (root and bench-psu only)"
     fi
 
-    # udev rule: keep an existing one unless a new ID_PATH is given
-    if [ -n "$id_path" ] || [ ! -e "$RULE" ]; then
+    # udev rule: keep an existing one unless --id-path or --tty asks for a new one
+    if [ -n "$id_path" ] || [ -n "$tty" ] || [ ! -e "$RULE" ]; then
         [ -n "$id_path" ] || id_path=$(detect_id_path "$tty")
         [ -n "$id_path" ] || die "could not determine ID_PATH; pass --id-path"
         sed "s|@ID_PATH@|$id_path|" "$SRC/install/70-kiprim.rules.in" > "$RULE.new"
@@ -147,7 +149,11 @@ do_install() {
         systemctl start bench-psud.service
         say "started bench-psud"
     fi
-    [ -e /dev/kiprim ] && say "/dev/kiprim -> $(readlink -f /dev/kiprim)" || say "warning: /dev/kiprim does not exist yet (supply unplugged?)"
+    if [ -e /dev/kiprim ]; then
+        say "/dev/kiprim -> $(readlink -f /dev/kiprim)"
+    else
+        say "warning: /dev/kiprim does not exist yet (supply unplugged?)"
+    fi
 }
 
 do_uninstall() {
