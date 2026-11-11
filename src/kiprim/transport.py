@@ -159,6 +159,15 @@ class TtyPort:
     def close(self) -> None:
         if self._fd is not None:
             try:
+                # Clear exclusive mode explicitly: the kernel keeps TIOCEXCL on
+                # the tty for as long as anything else holds it open (a pty
+                # master, a stray fd), which would lock out our own reopen.
+                tiocnxcl = getattr(termios, "TIOCNXCL", None)
+                if tiocnxcl is not None:
+                    try:
+                        fcntl.ioctl(self._fd, tiocnxcl)
+                    except OSError:
+                        pass
                 os.close(self._fd)  # also drops the flock
             finally:
                 self._fd = None

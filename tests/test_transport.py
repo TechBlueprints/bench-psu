@@ -56,9 +56,13 @@ def test_multiline_command_refused(transport):
 
 # ---- the real termios path, over a pty pair ----------------------------------
 def _pty():
+    """A pty pair, opened only by its path afterwards. The slave fd from
+    openpty() is closed at once: on Linux TIOCEXCL stays set until the last
+    fd on the tty closes, so a stray fd would keep the port "busy"."""
     master, slave = os.openpty()
     name = os.ttyname(slave)
-    return master, slave, name
+    os.close(slave)
+    return master, None, name
 
 
 def test_ttyport_roundtrip_over_pty():
@@ -82,7 +86,6 @@ def test_ttyport_roundtrip_over_pty():
         port.close()
     finally:
         os.close(master)
-        os.close(slave)
 
 
 def test_ttyport_exclusive():
@@ -95,7 +98,6 @@ def test_ttyport_exclusive():
         TtyPort(name).close()  # lock released on close
     finally:
         os.close(master)
-        os.close(slave)
 
 
 def test_ttyport_missing_device():

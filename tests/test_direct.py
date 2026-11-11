@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """`kiprim --direct` over a pty with a simulated supply on the other end."""
 import os
+import select
 import threading
+import time
 
 import pytest
 
@@ -14,16 +16,22 @@ from kiprim.simulator import SimulatedSupply
 @pytest.fixture
 def pty_supply():
     master, slave = os.openpty()
+    name = os.ttyname(slave)
+    os.close(slave)  # see tests/test_transport.py::_pty (Linux keeps TIOCEXCL while any fd is open)
     supply = SimulatedSupply()
     stop = threading.Event()
 
     def responder():
         buf = b""
         while not stop.is_set():
+            ready, _, _ = select.select([master], [], [], 0.05)
+            if not ready:
+                continue
             try:
                 chunk = os.read(master, 256)
-            except OSError:
-                return
+            except OSError:  # EIO on Linux while no slave fd is open: wait for one
+                time.sleep(0.01)
+                continue
             buf += chunk
             while b"\n" in buf:
                 line, buf = buf.split(b"\n", 1)
@@ -33,9 +41,9 @@ def pty_supply():
 
     t = threading.Thread(target=responder, daemon=True)
     t.start()
-    yield os.ttyname(slave), supply
+    yield name, supply
     stop.set()
-    os.close(slave)
+    t.join(1)
     os.close(master)
 
 
