@@ -64,15 +64,14 @@ def test_status_page_and_health(make_daemon):
     assert r.req("GET", "/api/health")[0] == 200
 
 
-def test_front_panel_change_is_noticed_and_logged(make_daemon, capsys):
+def test_front_panel_change_is_noticed_and_logged(make_daemon, events):
     s = SimulatedSupply()
     r = make_daemon(s)
     s.voltage = 5.0
     s.output = True
     assert wait_for(lambda: r.d.status()["setpoints"]["voltage"] == 5.0)
     assert wait_for(lambda: r.d.status()["output"] is True)
-    out = capsys.readouterr().out
-    assert '"event":"setpoints"' in out and '"event":"output"' in out
+    assert wait_for(lambda: {"setpoints", "output"} <= {e["event"] for e in list(events)})
 
 
 def test_write_with_token(make_daemon):
@@ -137,7 +136,7 @@ def test_worker_survives_unexpected_error_on_reconnect(make_daemon):
     assert r.d.worker.is_alive()
 
 
-def test_worker_survives_unexpected_error_in_poll(make_daemon, capsys):
+def test_worker_survives_unexpected_error_in_poll(make_daemon, events):
     s = SimulatedSupply(output=True)
     r = make_daemon(s)
     real = r.d._refresh
@@ -152,7 +151,7 @@ def test_worker_survives_unexpected_error_in_poll(make_daemon, capsys):
     assert wait_for(lambda: fired["n"] == 1)
     assert wait_for(lambda: r.d.status()["link"]["state"] == "ok", 5)
     assert r.d.worker.is_alive()
-    assert '"event":"worker_error"' in capsys.readouterr().out
+    assert wait_for(lambda: any(e["event"] == "worker_error" for e in list(events)))
     assert s.output is True and s.setters_received() == []
 
 
@@ -217,11 +216,11 @@ def test_energy_counters_and_reset(make_daemon):
     assert r.req("POST", "/api/counters/reset", {})[0] == 401
 
 
-def test_samples_logged(make_daemon, capsys):
+def test_samples_logged(make_daemon, events):
     s = SimulatedSupply(output=True)
     make_daemon(s, sample_interval_on=0.2)
     time.sleep(0.7)
-    samples = [json.loads(l) for l in capsys.readouterr().out.splitlines() if '"event":"sample"' in l]
+    samples = [e for e in list(events) if e["event"] == "sample"]
     assert len(samples) >= 2
     assert {"voltage", "current", "power", "output", "mode", "wh", "ah"} <= samples[0].keys()
 

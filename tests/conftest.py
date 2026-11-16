@@ -18,6 +18,28 @@ TOKEN = "test-token-not-secret"
 
 
 @pytest.fixture
+def events(monkeypatch):
+    """The daemon's log events, recorded where they are made.
+
+    Reading a worker thread's line back through capsys raced on Linux CI with
+    Python 3.13 (the line reached the real stdout), so tests that check what
+    the daemon logged use this list instead. The lines still go to stdout.
+    """
+    import kiprim.daemon as daemon_mod
+    seen = []
+    lock = threading.Lock()
+    real = daemon_mod.log_event
+
+    def record(event, **fields):
+        with lock:
+            seen.append({"event": event, **fields})
+        real(event, **fields)
+
+    monkeypatch.setattr(daemon_mod, "log_event", record)
+    return seen
+
+
+@pytest.fixture
 def supply():
     return SimulatedSupply()
 
